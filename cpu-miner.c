@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <time.h>
+#include <math.h>
 #ifndef WIN32
 #include <sys/resource.h>
 #endif
@@ -27,6 +28,8 @@
 #include <curl/curl.h>
 #include "compat.h"
 #include "miner.h"
+#include "findnonce.h"
+#include "ocl.h"
 
 #define PROGRAM_NAME		"minerd"
 #define DEF_RPC_URL		"http://127.0.0.1:8332/"
@@ -104,6 +107,7 @@ static const char *algo_names[] = {
 
 bool opt_debug = false;
 bool opt_protocol = false;
+bool opt_ndevs = false;
 bool want_longpoll = true;
 bool have_longpoll = false;
 bool use_syslog = false;
@@ -171,6 +175,9 @@ static struct option_help options_help[] = {
 	{ "debug",
 	  "(-D) Enable debug output (default: off)" },
 
+	{ "ndevs",
+	  "(-n) Display number of detected GPUs" },
+
 	{ "no-longpoll",
 	  "Disable X-Long-Polling support (default: enabled)" },
 
@@ -219,6 +226,7 @@ static struct option options[] = {
 	{ "config", 1, NULL, 'c' },
 	{ "debug", 0, NULL, 'D' },
 	{ "help", 0, NULL, 'h' },
+	{ "ndevs", 0, NULL, 'n' },
 	{ "no-longpoll", 0, NULL, 1003 },
 	{ "pass", 1, NULL, 'p' },
 	{ "protocol-dump", 0, NULL, 'P' },
@@ -233,8 +241,6 @@ static struct option options[] = {
 	{ "url", 1, NULL, 1001 },
 	{ "user", 1, NULL, 'u' },
 	{ "userpass", 1, NULL, 1002 },
-
-	{ }
 };
 
 struct work {
@@ -244,6 +250,12 @@ struct work {
 	unsigned char	target[32];
 
 	unsigned char	hash[32];
+
+	uint32_t		output[MAXTHREADS];
+	uint32_t		res_nonce;
+	uint32_t		valid;
+	uint32_t		ready;
+	dev_blk_ctx		blk;
 };
 
 static bool jobj_binary(const json_t *obj, const char *key,
@@ -489,7 +501,7 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	khashes = hashes_done / 1000.0;
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
 
-	if (opt_n_threads > 1) {
+	if (opt_n_threads + opt_ndevs > 1) {
 		double total_mhashes, total_secs;
 
 		/* Totals are updated by all threads so can race without locking */
@@ -568,6 +580,15 @@ static bool submit_work(struct thr_info *thr, const struct work *work_in)
 err_out:
 	workio_cmd_free(wc);
 	return false;
+}
+
+bool submit_nonce(struct thr_info *thr, struct work *work, uint32_t nonce)
+{
+	work->data[64+12+0] = (nonce>>0) & 0xff;
+	work->data[64+12+1] = (nonce>>8) & 0xff;
+	work->data[64+12+2] = (nonce>>16) & 0xff;
+	work->data[64+12+3] = (nonce>>24) & 0xff;
+	return submit_work(thr, work);
 }
 
 static void *miner_thread(void *userdata)
@@ -689,11 +710,163 @@ out:
 	return NULL;
 }
 
+enum {
+	STAT_SLEEP_INTERVAL		= 1,
+	STAT_CTR_INTERVAL		= 10000000,
+	FAILURE_INTERVAL		= 30,
+};
+
+static int block = 0;
+static _clState *clStates[16];
+
+static void *gpuminer_thread(void *userdata)
+{
+	struct thr_info *mythr = userdata;
+	int thr_id = mythr->id;
+	int failures = 0;
+
+	uint32_t res[MAXTHREADS];
+
+	setpriority(PRIO_PROCESS, 0, 19);
+	drop_policy();
+
+	size_t globalThreads[1];
+	size_t localThreads[1];
+
+	cl_int status;
+
+	_clState *clState = clStates[thr_id];
+
+	status = clSetKernelArg(clState->kernel, 0,  sizeof(cl_mem), (void *)&clState->inputBuffer);
+	if(status != CL_SUCCESS) { printf("Error: Setting kernel argument 1.\n"); return false; }
+
+	status = clSetKernelArg(clState->kernel, 1,  sizeof(cl_mem), (void *)&clState->outputBuffer);
+	if(status != CL_SUCCESS) { printf("Error: Setting kernel argument 2.\n"); return false; }
+
+	struct work *work;
+	work = malloc(sizeof(struct work)*2);
+
+	work[0].ready = 0;
+	work[1].ready = 0;
+
+	int frame = 0;
+	int res_frame = 0;
+	int my_block = block;
+	bool need_work = true;
+	unsigned long hashes_done;
+	hashes_done = 0;
+
+	unsigned int h0count = 0;
+	long work_size = 1024;
+
+	while (1) {
+		struct timeval tv_start, tv_end, diff;
+		int threads;
+		bool rc;
+
+		gettimeofday(&tv_start, NULL);
+
+		if (need_work || my_block != block) {
+			frame++;
+			frame %= 2;
+
+			if (opt_debug)
+				fprintf(stderr, "getwork\n");
+
+			/* obtain new work from internal workio thread */
+			if (unlikely(!get_work(mythr, work + frame))) {
+				applog(LOG_ERR, "work retrieval failed, exiting "
+					"gpu mining thread %d", mythr->id);
+				goto out;
+			}
+
+			precalc_hash(&work[frame].blk, (uint32_t *)(work[frame].midstate), (uint32_t *)(work[frame].data + 64));
+
+			work[frame].blk.nonce = 0;
+			work[frame].valid = true;
+			work[frame].ready = 0;
+			
+			my_block = block;
+			need_work = false;
+		}
+	
+		threads = 102400 * 4;
+		globalThreads[0] = threads;
+		localThreads[0] = 128;
+
+		status = clEnqueueWriteBuffer(clState->commandQueue, clState->inputBuffer, CL_TRUE, 0,
+				sizeof(dev_blk_ctx), (void *)&work[frame].blk, 0, NULL, NULL);
+		if(status != CL_SUCCESS) { printf("Error: clEnqueueWriteBuffer failed.\n"); goto out; }
+
+		clFinish(clState->commandQueue);
+
+		status = clEnqueueNDRangeKernel(clState->commandQueue, clState->kernel, 1, NULL, 
+				globalThreads, localThreads, 0,  NULL, NULL);
+		if (status != CL_SUCCESS) { printf("Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n"); goto out; }
+
+		clFlush(clState->commandQueue);
+
+		hashes_done = work_size * threads;
+
+		if (work[res_frame].ready) {
+			rc = false;
+
+			uint32_t bestG = ~0;
+			uint32_t nonce;
+			int j;
+			for(j = 0; j < work[res_frame].ready; j++) {
+				if(res[j]) { 
+					uint32_t start = (work[res_frame].res_nonce + j)<<10;
+					uint32_t my_g, my_nonce;
+					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + work_size + 2, &my_nonce, &h0count);
+
+					rc = true;
+				}       
+			}       
+			
+			work[res_frame].ready = false;
+
+			uint32_t *target = (uint32_t *)(work[res_frame].target + 24);
+		}
+
+		gettimeofday(&tv_end, NULL);
+		timeval_subtract(&diff, &tv_end, &tv_start);
+
+		hashmeter(thr_id, &diff, hashes_done);
+
+		/* adjust max_nonce to meet target scan time */
+		if (diff.tv_usec > 500000)
+			diff.tv_sec++;
+		if (diff.tv_sec > 0)
+			work_size = hashes_done * opt_scantime / diff.tv_sec / threads;
+
+		status = clEnqueueReadBuffer(clState->commandQueue, clState->outputBuffer, CL_TRUE, 0, 
+				sizeof(uint32_t) * threads, res, 0, NULL, NULL);   
+		if (status != CL_SUCCESS) { printf("Error: clEnqueueReadBuffer failed. (clEnqueueReadBuffer)\n"); goto out;}
+
+		res_frame = frame;
+		work[res_frame].ready = threads;
+		work[res_frame].res_nonce = work[res_frame].blk.nonce;
+
+		work[frame].blk.nonce += threads;
+
+		if (unlikely(work[frame].blk.nonce > 4000000 - threads))
+			need_work = true;
+
+		failures = 0;
+	}
+
+out:
+	tq_freeze(mythr->q);
+
+	return NULL;
+}
+
 static void restart_threads(void)
 {
 	int i;
 
-	for (i = 0; i < opt_n_threads; i++)
+	for (i = 0; i < opt_n_threads + opt_ndevs; i++)
 		work_restart[i].restart = 1;
 }
 
@@ -943,7 +1116,14 @@ static void parse_cmdline(int argc, char *argv[])
 int main (int argc, char *argv[])
 {
 	struct thr_info *thr;
-	int i;
+	int i, nDevs;
+	char name[32];
+
+	nDevs = clDevicesNum();
+	if (opt_ndevs) {
+		printf("%i\n", nDevs);
+		return nDevs;
+	}
 
 	rpc_url = strdup(DEF_RPC_URL);
 
@@ -971,16 +1151,16 @@ int main (int argc, char *argv[])
 		openlog("cpuminer", LOG_PID, LOG_USER);
 #endif
 
-	work_restart = calloc(opt_n_threads, sizeof(*work_restart));
+	work_restart = calloc(opt_n_threads + opt_ndevs, sizeof(*work_restart));
 	if (!work_restart)
 		return 1;
 
-	thr_info = calloc(opt_n_threads + 2, sizeof(*thr));
+	thr_info = calloc(opt_n_threads + 2 + opt_ndevs, sizeof(*thr));
 	if (!thr_info)
 		return 1;
 
 	/* init workio thread info */
-	work_thr_id = opt_n_threads;
+	work_thr_id = opt_n_threads + opt_ndevs;
 	thr = &thr_info[work_thr_id];
 	thr->id = work_thr_id;
 	thr->q = tq_new();
@@ -995,7 +1175,7 @@ int main (int argc, char *argv[])
 
 	/* init longpoll thread info */
 	if (want_longpoll) {
-		longpoll_thr_id = opt_n_threads + 1;
+		longpoll_thr_id = opt_n_threads + opt_ndevs + 1;
 		thr = &thr_info[longpoll_thr_id];
 		thr->id = longpoll_thr_id;
 		thr->q = tq_new();
@@ -1011,8 +1191,32 @@ int main (int argc, char *argv[])
 		longpoll_thr_id = -1;
 
 	gettimeofday(&total_tv_start, NULL);
+
+	/* start gpu mining threads */
+	for (i = 0; i < nDevs; i++) {
+		thr = &thr_info[i];
+
+		thr->id = i;
+		thr->q = tq_new();
+		if (!thr->q)
+			return 1;
+
+		printf("Init GPU %i\n", i);
+		clStates[i] = initCl(i, name, sizeof(name));
+		printf("initCl() finished. Found %s\n", name);
+
+		if (unlikely(pthread_create(&thr->pth, NULL, gpuminer_thread, thr))) {
+			applog(LOG_ERR, "thread %d create failed", i);
+			return 1;
+		}
+
+		sleep(1);	/* don't pound RPC server all at once */
+	}
+
+	fprintf(stderr, "%d gpu miner threads started\n", i);
+
 	/* start mining threads */
-	for (i = 0; i < opt_n_threads; i++) {
+	for (i = nDevs; i < nDevs + opt_n_threads; i++) {
 		thr = &thr_info[i];
 
 		thr->id = i;
@@ -1028,7 +1232,7 @@ int main (int argc, char *argv[])
 		sleep(1);	/* don't pound RPC server all at once */
 	}
 
-	applog(LOG_INFO, "%d miner threads started, "
+	applog(LOG_INFO, "%d cpu miner threads started, "
 		"using SHA256 '%s' algorithm.",
 		opt_n_threads,
 		algo_names[opt_algo]);
