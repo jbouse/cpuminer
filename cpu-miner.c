@@ -122,6 +122,7 @@ static enum sha256_algos opt_algo = ALGO_SSE2_64;
 #else
 static enum sha256_algos opt_algo = ALGO_C;
 #endif
+static int nDevs;
 static int opt_n_threads;
 static int num_processors;
 static char *rpc_url;
@@ -135,7 +136,7 @@ pthread_mutex_t time_lock;
 static pthread_mutex_t hash_lock;
 static unsigned long total_hashes_done;
 static struct timeval total_tv_start;
-static int solutions;
+static int accepted, rejected;
 
 
 struct option_help {
@@ -343,10 +344,12 @@ static bool submit_upstream_work(CURL *curl, const struct work *work)
 	res = json_object_get(val, "result");
 
 	if (json_is_true(res)) {
-		solutions++;
+		accepted++;
 		applog(LOG_INFO, "PROOF OF WORK RESULT: true (yay!!!)");
-	} else
+	} else {
+		rejected++;
 		applog(LOG_INFO, "PROOF OF WORK RESULT: false (booooo)");
+	}
 
 	json_decref(val);
 
@@ -501,7 +504,7 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	khashes = hashes_done / 1000.0;
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
 
-	if (opt_n_threads + opt_ndevs > 1) {
+	if (opt_n_threads + nDevs > 1) {
 		double total_mhashes, total_secs;
 
 		/* Totals are updated by all threads so can race without locking */
@@ -513,13 +516,17 @@ static void hashmeter(int thr_id, struct timeval *diff,
 		pthread_mutex_unlock(&hash_lock);
 		total_secs = (double)total_diff.tv_sec +
 			((double)total_diff.tv_usec / 1000000.0);
-		applog(LOG_INFO, "[Total: %.2f Mhash/sec] "
-		       "[thread %d: %lu hashes, %.0f khash/sec] [Solved: %d]",
-		       total_mhashes / total_secs, thr_id, hashes_done,
-		       khashes / secs, solutions);
+		if (opt_debug)
+			applog(LOG_DEBUG, "[thread %d: %lu hashes, %.0f khash/sec]",
+			       thr_id, hashes_done);
+		if (!thr_id)
+			applog(LOG_INFO, "[%.2f Mhash/sec] [%d Accepted] [%d Rejected]",
+			       total_mhashes / total_secs, accepted, rejected);
 	} else {
-		applog(LOG_INFO, "[%lu hashes, %.0f khash/sec] [Solved: %d]",
-		       hashes_done, khashes / secs, solutions);
+		if (opt_debug)
+			applog(LOG_DEBUG, "[%lu hashes]", hashes_done);
+		applog(LOG_INFO, "%.0f khash/sec] [%d Accepted] [%d Rejected]",
+				khashes / secs, accepted, rejected);
 	}
 }
 
@@ -757,7 +764,6 @@ static void *gpuminer_thread(void *userdata)
 	hashes_done = 0;
 
 	unsigned int h0count = 0;
-	long work_size = 1024;
 
 	while (1) {
 		struct timeval tv_start, tv_end, diff;
@@ -806,7 +812,7 @@ static void *gpuminer_thread(void *userdata)
 
 		clFlush(clState->commandQueue);
 
-		hashes_done = work_size * threads;
+		hashes_done = 1024 * threads;
 
 		if (work[res_frame].ready) {
 			rc = false;
@@ -818,7 +824,7 @@ static void *gpuminer_thread(void *userdata)
 				if(res[j]) { 
 					uint32_t start = (work[res_frame].res_nonce + j)<<10;
 					uint32_t my_g, my_nonce;
-					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + work_size + 2, &my_nonce, &h0count);
+					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count);
 
 					rc = true;
 				}       
@@ -838,7 +844,7 @@ static void *gpuminer_thread(void *userdata)
 		if (diff.tv_usec > 500000)
 			diff.tv_sec++;
 		if (diff.tv_sec > 0)
-			work_size = hashes_done * opt_scantime / diff.tv_sec / threads;
+			applog(LOG_INFO, "Not reaching opt_scantime by %d", diff.tv_sec);
 
 		status = clEnqueueReadBuffer(clState->commandQueue, clState->outputBuffer, CL_TRUE, 0, 
 				sizeof(uint32_t) * threads, res, 0, NULL, NULL);   
@@ -866,7 +872,7 @@ static void restart_threads(void)
 {
 	int i;
 
-	for (i = 0; i < opt_n_threads + opt_ndevs; i++)
+	for (i = 0; i < opt_n_threads + nDevs; i++)
 		work_restart[i].restart = 1;
 }
 
@@ -1116,7 +1122,7 @@ static void parse_cmdline(int argc, char *argv[])
 int main (int argc, char *argv[])
 {
 	struct thr_info *thr;
-	int i, nDevs;
+	int i;
 	char name[32];
 
 	nDevs = clDevicesNum();
@@ -1151,16 +1157,16 @@ int main (int argc, char *argv[])
 		openlog("cpuminer", LOG_PID, LOG_USER);
 #endif
 
-	work_restart = calloc(opt_n_threads + opt_ndevs, sizeof(*work_restart));
+	work_restart = calloc(opt_n_threads + nDevs, sizeof(*work_restart));
 	if (!work_restart)
 		return 1;
 
-	thr_info = calloc(opt_n_threads + 2 + opt_ndevs, sizeof(*thr));
+	thr_info = calloc(opt_n_threads + 2 + nDevs, sizeof(*thr));
 	if (!thr_info)
 		return 1;
 
 	/* init workio thread info */
-	work_thr_id = opt_n_threads + opt_ndevs;
+	work_thr_id = opt_n_threads + nDevs;
 	thr = &thr_info[work_thr_id];
 	thr->id = work_thr_id;
 	thr->q = tq_new();
@@ -1175,7 +1181,7 @@ int main (int argc, char *argv[])
 
 	/* init longpoll thread info */
 	if (want_longpoll) {
-		longpoll_thr_id = opt_n_threads + opt_ndevs + 1;
+		longpoll_thr_id = opt_n_threads + nDevs + 1;
 		thr = &thr_info[longpoll_thr_id];
 		thr->id = longpoll_thr_id;
 		thr->q = tq_new();
