@@ -766,6 +766,7 @@ static void *gpuminer_thread(void *userdata)
 	unsigned long hashes_done = 0;
 	unsigned int threads = 102400 * 4;
 	unsigned int h0count = 0;
+	unsigned int loops = 128;
 	gettimeofday(&tv_start, NULL);
 
 	while (1) {
@@ -790,6 +791,7 @@ static void *gpuminer_thread(void *userdata)
 			work[frame].blk.nonce = 0;
 			work[frame].valid = true;
 			work[frame].ready = 0;
+			work[frame].blk.loops = loops;
 			need_work = false;
 		}
 		globalThreads[0] = threads;
@@ -809,7 +811,7 @@ static void *gpuminer_thread(void *userdata)
 
 		clFlush(clState->commandQueue);
 
-		hashes_done += threads;
+		hashes_done += threads * loops;
 
 		if (work[res_frame].ready) {
 			uint32_t bestG = ~0;
@@ -852,9 +854,9 @@ static void *gpuminer_thread(void *userdata)
 		res_frame = frame;
 		work[res_frame].ready = threads;
 		work[res_frame].res_nonce = work[res_frame].blk.nonce;
-		work[frame].blk.nonce += threads;
+		work[frame].blk.nonce += threads * loops;
 
-		if (unlikely(work[frame].blk.nonce > 4000000 - threads / 1024) ||
+		if (unlikely(work[frame].blk.nonce > 4000000 - threads) ||
 			(work_restart[thr_id].restart))
 				need_work = true;
 	}
