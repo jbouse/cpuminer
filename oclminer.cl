@@ -56,7 +56,7 @@ __kernel __attribute__((vec_type_hint(uint))) WGS void oclminer(
 
   const uint tnonce = (ctx->nonce + myid)<<10;
 
-for (it = 0; it < 128; it++)
+for (it = 0; it < 1024; it++)
 {
     W3 = 0 ^ tnonce;
     E = fcty_e +  W3; A = state0 + E; E = E + fcty_e2;
