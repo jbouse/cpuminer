@@ -734,6 +734,8 @@ static void *gpuminer_thread(void *userdata)
 {
 	struct thr_info *mythr = userdata;
 	int thr_id = mythr->id;
+	int failures = 0;
+
 	uint32_t res[MAXTHREADS];
 
 	setpriority(PRIO_PROCESS, 0, 19);
@@ -746,11 +748,10 @@ static void *gpuminer_thread(void *userdata)
 	_clState *clState = clStates[thr_id];
 
 	status = clSetKernelArg(clState->kernel, 0,  sizeof(cl_mem), (void *)&clState->inputBuffer);
-	if (unlikely(status != CL_SUCCESS))
-		{ applog(LOG_ERR, "Error: Setting kernel argument 1.\n"); goto out; }
+	if(status != CL_SUCCESS) { printf("Error: Setting kernel argument 1.\n"); return false; }
 
 	status = clSetKernelArg(clState->kernel, 1,  sizeof(cl_mem), (void *)&clState->outputBuffer);
-	if(status != CL_SUCCESS) { applog(LOG_ERR, "Error: Setting kernel argument 2.\n"); goto out; }
+	if(status != CL_SUCCESS) { printf("Error: Setting kernel argument 2.\n"); return false; }
 
 	struct work *work;
 	work = malloc(sizeof(struct work)*2);
@@ -762,22 +763,24 @@ static void *gpuminer_thread(void *userdata)
 	int res_frame = 0;
 	int my_block = block;
 	bool need_work = true;
-	unsigned long hashes_done = 0;
-	unsigned int threads = 102400 * 4;
+	unsigned long hashes_done;
+	hashes_done = 0;
+
 	unsigned int h0count = 0;
 
 	while (1) {
 		struct timeval tv_start, tv_end, diff;
 		int threads;
+		bool rc;
 
 		gettimeofday(&tv_start, NULL);
 
 		if (need_work || my_block != block) {
-			work_restart[thr_id].restart = 0;
-			frame ^= 1;
+			frame++;
+			frame %= 2;
 
 			if (opt_debug)
-				applog(LOG_DEBUG, "getwork");
+				fprintf(stderr, "getwork\n");
 
 			/* obtain new work from internal workio thread */
 			if (unlikely(!get_work(mythr, work + frame))) {
@@ -796,36 +799,43 @@ static void *gpuminer_thread(void *userdata)
 			need_work = false;
 		}
 	
+		threads = 102400 * 4;
 		globalThreads[0] = threads;
 		localThreads[0] = 128;
 
 		status = clEnqueueWriteBuffer(clState->commandQueue, clState->inputBuffer, CL_TRUE, 0,
 				sizeof(dev_blk_ctx), (void *)&work[frame].blk, 0, NULL, NULL);
-		if(status != CL_SUCCESS) { applog(LOG_ERR, "Error: clEnqueueWriteBuffer failed.\n"); goto out; }
+		if(status != CL_SUCCESS) { printf("Error: clEnqueueWriteBuffer failed.\n"); goto out; }
 
 		clFinish(clState->commandQueue);
 
 		status = clEnqueueNDRangeKernel(clState->commandQueue, clState->kernel, 1, NULL, 
 				globalThreads, localThreads, 0,  NULL, NULL);
-		if (unlikely(status != CL_SUCCESS))
-			{ applog(LOG_ERR, "Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n"); goto out; }
+		if (status != CL_SUCCESS) { printf("Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n"); goto out; }
 
 		clFlush(clState->commandQueue);
 
 		hashes_done = 1024 * threads;
 
-		if (work[res_frame].ready && res[0]) {
+		if (work[res_frame].ready) {
+			rc = false;
+
 			uint32_t bestG = ~0;
 			uint32_t nonce;
 			int j;
-			for (j = 0; j < work[res_frame].ready; j++) {
-				if (unlikely(res[j])) { 
-					uint32_t start = (work[res_frame].res_nonce + j) << 10;
+			for(j = 0; j < work[res_frame].ready; j++) {
+				if(res[j]) { 
+					uint32_t start = (work[res_frame].res_nonce + j)<<10;
+					uint32_t my_g, my_nonce;
+					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count);
 
-					postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &h0count);
+					rc = true;
 				}       
-			}
+			}       
+			
 			work[res_frame].ready = false;
+
+			uint32_t *target = (uint32_t *)(work[res_frame].target + 24);
 		}
 
 		gettimeofday(&tv_end, NULL);
@@ -841,8 +851,7 @@ static void *gpuminer_thread(void *userdata)
 
 		status = clEnqueueReadBuffer(clState->commandQueue, clState->outputBuffer, CL_TRUE, 0, 
 				sizeof(uint32_t) * threads, res, 0, NULL, NULL);   
-		if (unlikely(status != CL_SUCCESS))
-			{ applog(LOG_ERR, "Error: clEnqueueReadBuffer failed. (clEnqueueReadBuffer)\n"); goto out;}
+		if (status != CL_SUCCESS) { printf("Error: clEnqueueReadBuffer failed. (clEnqueueReadBuffer)\n"); goto out;}
 
 		res_frame = frame;
 		work[res_frame].ready = threads;
@@ -850,9 +859,10 @@ static void *gpuminer_thread(void *userdata)
 
 		work[frame].blk.nonce += threads;
 
-		if (unlikely(work[frame].blk.nonce > 4000000 - threads) ||
-			(work_restart[thr_id].restart))
-				need_work = true;
+		if (unlikely(work[frame].blk.nonce > 4000000 - threads))
+			need_work = true;
+
+		failures = 0;
 	}
 
 out:

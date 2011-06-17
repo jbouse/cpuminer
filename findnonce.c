@@ -131,14 +131,16 @@ void precalc_hash(dev_blk_ctx *blk, uint32_t *state, uint32_t *data) {
   R(E, F, G, H, A, B, C, D, P(u+4), SHA256_K[u+4]); \
   R(D, E, F, G, H, A, B, C, P(u+5), SHA256_K[u+5])
 
-void postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk, struct work *work,
-		   uint32_t start, uint32_t end, unsigned int *h0count)
+uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
+		       struct work *work, uint32_t start, uint32_t end, 
+		       uint32_t *best_nonce, unsigned int *h0count)
 {
 	cl_uint A, B, C, D, E, F, G, H;
 	cl_uint W[16];
 	cl_uint nonce;
 	cl_uint best_g = ~0;
 
+	work_restart[thr->id].restart = 0;
 	for (nonce = start; nonce != end; nonce+=1) {
 		A = blk->cty_a; B = blk->cty_b;
 		C = blk->cty_c; D = blk->cty_d;
@@ -179,11 +181,17 @@ void postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk, struct work *work,
 
 			G += 0x1f83d9ab;
 			G = ByteReverse(G);
-			if (G < best_g)
+
+			if (G < best_g) {
+				*best_nonce = nonce;
 				best_g = G;
+			}
 		}
+		if (work_restart[thr->id].restart)
+			break;
 	}
 out:
-	if (unlikely(best_g == ~0))
-		printf("No best_g found! Error in OpenCL code?\n");
+	if (best_g == ~0) printf("No best_g found! Error in OpenCL code?\n");
+
+	return best_g;
 }
