@@ -854,9 +854,9 @@ static void *gpuminer_thread(void *userdata)
 		work[res_frame].res_nonce = work[res_frame].blk.nonce;
 		work[frame].blk.nonce += threads;
 
-		//if (unlikely(work[frame].blk.nonce > 4000000 - threads) ||
-		if (unlikely(work_restart[thr_id].restart))
-			need_work = true;
+		if (unlikely(work[frame].blk.nonce > 4000000 - threads / 1024) ||
+			(work_restart[thr_id].restart))
+				need_work = true;
 	}
 
 out:
