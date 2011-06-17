@@ -522,7 +522,7 @@ static void hashmeter(int thr_id, struct timeval *diff,
 			((double)total_diff.tv_usec / 1000000.0);
 		if (opt_debug)
 			applog(LOG_DEBUG, "[thread %d: %lu hashes, %.0f khash/sec]",
-			       thr_id, hashes_done);
+			       thr_id, hashes_done, hashes_done / secs);
 		if (!thr_id)
 			applog(LOG_INFO, "[%.2f Mhash/sec] [%d Accepted] [%d Rejected]",
 			       total_mhashes / total_secs, accepted, rejected);
@@ -830,16 +830,16 @@ static void *gpuminer_thread(void *userdata)
 			work[res_frame].ready = false;
 		}
 
-		if (threads * 1024 <= hashes_done) {
-			hashes_done = 0;
+		if (hashes_done >= threads * 1024) {
 			gettimeofday(&tv_end, NULL);
 			timeval_subtract(&diff, &tv_end, &tv_start);
 			hashmeter(thr_id, &diff, hashes_done);
+			hashes_done = 0;
 
 			/* adjust max_nonce to meet target scan time */
 			if (diff.tv_usec > 500000)
 				diff.tv_sec++;
-			if (diff.tv_sec > 0)
+			if (diff.tv_sec > 5)
 				applog(LOG_INFO, "Not reaching opt_scantime by %d", diff.tv_sec);
 			gettimeofday(&tv_start, NULL);
 		}
