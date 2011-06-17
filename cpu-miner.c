@@ -735,7 +735,8 @@ static void *gpuminer_thread(void *userdata)
 	struct thr_info *mythr = userdata;
 	struct timeval tv_start;
 	int thr_id = mythr->id;
-	uint32_t res;
+	uint32_t res[1];
+	res[0] = 0;
 
 	setpriority(PRIO_PROCESS, 0, 19);
 
@@ -754,50 +755,39 @@ static void *gpuminer_thread(void *userdata)
 	if (unlikely(status != CL_SUCCESS))
 		{ applog(LOG_ERR, "Error: Setting kernel argument 2.\n"); goto out; }
 
-	struct work *work;
-	work = malloc(sizeof(struct work)*2);
-
-	work[0].ready = 0;
-	work[1].ready = 0;
-
-	int frame = 0;
-	int res_frame = 0;
+	struct work *work = malloc(sizeof(struct work));
 	bool need_work = true;
 	unsigned long hashes_done = 0;
 	unsigned int threads = 1 << 21;
 	unsigned int h0count = 0;
 	gettimeofday(&tv_start, NULL);
-	res = 0;
 
 	while (1) {
 		struct timeval tv_end, diff;
 
 		if (need_work) {
 			work_restart[thr_id].restart = 0;
-			frame ^= 1;
 
 			if (opt_debug)
 				applog(LOG_DEBUG, "getwork");
 
 			/* obtain new work from internal workio thread */
-			if (unlikely(!get_work(mythr, work + frame))) {
+			if (unlikely(!get_work(mythr, work))) {
 				applog(LOG_ERR, "work retrieval failed, exiting "
 					"gpu mining thread %d", mythr->id);
 				goto out;
 			}
 
-			precalc_hash(&work[frame].blk, (uint32_t *)(work[frame].midstate), (uint32_t *)(work[frame].data + 64));
+			precalc_hash(&work->blk, (uint32_t *)(work->midstate), (uint32_t *)(work->data + 64));
 
-			work[frame].blk.nonce = 0;
-			work[frame].valid = true;
-			work[frame].ready = 0;
+			work->blk.nonce = 0;
 			need_work = false;
 		}
 		globalThreads[0] = threads;
 		localThreads[0] = 128;
 
 		status = clEnqueueWriteBuffer(clState->commandQueue, clState->inputBuffer, CL_TRUE, 0,
-				sizeof(dev_blk_ctx), (void *)&work[frame].blk, 0, NULL, NULL);
+				sizeof(dev_blk_ctx), (void *)&work->blk, 0, NULL, NULL);
 		if (unlikely(status != CL_SUCCESS))
 			{ printf("Error: clEnqueueWriteBuffer failed.\n"); goto out; }
 
@@ -812,28 +802,24 @@ static void *gpuminer_thread(void *userdata)
 
 		hashes_done += threads;
 
-		if (work[res_frame].ready) {
-			uint32_t bestG = ~0;
-			uint32_t nonce;
-			int j;
-
-			if (res) {
-				res = 0;
-				applog(LOG_INFO, "Found something?");
-				for (j = 0; j < work[res_frame].ready; j++) {
-					uint32_t start = (work[res_frame].res_nonce + j) << 10;
-					uint32_t my_g, my_nonce;
-
-					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count);
-				}
-			}
-			work[res_frame].ready = false;
-		}
-
 		status = clEnqueueReadBuffer(clState->commandQueue, clState->outputBuffer, CL_TRUE, 0, 
-				sizeof(uint32_t), &res, 0, NULL, NULL);   
+				sizeof(uint32_t), res, 0, NULL, NULL);   
 		if (unlikely(status != CL_SUCCESS))
 			{ applog(LOG_ERR, "Error: clEnqueueReadBuffer failed. (clEnqueueReadBuffer)\n"); goto out;}
+
+		if (res[0]) {
+			uint32_t bestG = ~0;
+			int j;
+
+			applog(LOG_INFO, "Found something?");
+			for (j = 0; j < threads; j++) {
+				uint32_t start = work->blk.nonce + j;
+				uint32_t my_g, my_nonce;
+
+				my_g = postcalc_hash(mythr, &work->blk, work, start, start + 1026, &my_nonce, &h0count);
+			}
+			res[0] = 0;
+		}
 
 		gettimeofday(&tv_end, NULL);
 		timeval_subtract(&diff, &tv_end, &tv_start);
@@ -845,16 +831,12 @@ static void *gpuminer_thread(void *userdata)
 			gettimeofday(&tv_start, NULL);
 		}
 
-		res_frame = frame;
-		work[res_frame].ready = threads;
-		work[res_frame].res_nonce = work[res_frame].blk.nonce;
-		work[frame].blk.nonce += threads;
+		work->blk.nonce += threads;
 
-		if (unlikely(work[frame].blk.nonce > ~0UL - threads * 2) ||
+		if (unlikely(work->blk.nonce > ~0UL - threads) ||
 			(work_restart[thr_id].restart))
 				need_work = true;
 	}
-
 out:
 	tq_freeze(mythr->q);
 

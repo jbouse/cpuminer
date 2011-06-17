@@ -54,7 +54,8 @@ __kernel __attribute__((vec_type_hint(uint))) WGS void oclminer(
   uint res = 0;
   const uint myid = get_global_id(0);
 
-  const uint tnonce = (ctx->nonce + myid)<<10;
+  const uint tnonce = ctx->nonce + myid;
+  //(ctx->nonce + myid)<<10;
 
     W3 = 0 ^ tnonce;
     E = fcty_e +  W3; A = state0 + E; E = E + fcty_e2;
@@ -276,7 +277,6 @@ __kernel __attribute__((vec_type_hint(uint))) WGS void oclminer(
     W12 = W12 + (rotr(W13, 7) ^ rotr(W13, 18) ^ (W13 >> 3)) + W5 + (rotr(W10, 17) ^ rotr(W10, 19) ^ (W10 >> 10)); 
     D = D + (rotr(A, 6) ^ rotr(A, 11) ^ rotr(A, 25)) + (C ^ (A & (B ^ C))) + K[60] + W12; H = H + D;
 
-	res |= (H==0xa41f32e7);
+	output[0] |= (H==0xa41f32e7);
 
-	*output |= res;
 }
