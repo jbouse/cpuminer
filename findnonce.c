@@ -190,7 +190,7 @@ uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
 	}
 out:
 	if (unlikely(best_g == ~0) && thread)
-		printf("No best_g found! Error in OpenCL code?\n");
+		applog(LOG_ERR, "No best_g found! Error in OpenCL code?");
 
 	return best_g;
 }
