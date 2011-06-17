@@ -1195,6 +1195,8 @@ int main (int argc, char *argv[])
 	} else
 		longpoll_thr_id = -1;
 
+	gettimeofday(&total_tv_start, NULL);
+
 	/* start gpu mining threads */
 	for (i = 0; i < nDevs; i++) {
 		thr = &thr_info[i];
@@ -1216,7 +1218,7 @@ int main (int argc, char *argv[])
 		sleep(1);	/* don't pound RPC server all at once */
 	}
 
-	fprintf(stderr, "%d gpu miner threads started\n", i);
+	applog(LOG_INFO, "%d gpu miner threads started", i);
 
 	/* start mining threads */
 	for (i = nDevs; i < nDevs + opt_n_threads; i++) {
@@ -1234,8 +1236,6 @@ int main (int argc, char *argv[])
 
 		sleep(1);	/* don't pound RPC server all at once */
 	}
-
-	gettimeofday(&total_tv_start, NULL);
 
 	applog(LOG_INFO, "%d cpu miner threads started, "
 		"using SHA256 '%s' algorithm.",
