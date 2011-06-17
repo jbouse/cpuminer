@@ -762,7 +762,6 @@ static void *gpuminer_thread(void *userdata)
 
 	int frame = 0;
 	int res_frame = 0;
-	int my_block = block;
 	bool need_work = true;
 	unsigned long hashes_done = 0;
 	unsigned int threads = 102400 * 4;
@@ -772,10 +771,9 @@ static void *gpuminer_thread(void *userdata)
 	while (1) {
 		struct timeval tv_end, diff;
 
-		if (need_work || my_block != block) {
+		if (need_work) {
 			work_restart[thr_id].restart = 0;
-			frame++;
-			frame %= 2;
+			frame ^= 1;
 
 			if (opt_debug)
 				applog(LOG_DEBUG, "getwork");
@@ -792,8 +790,6 @@ static void *gpuminer_thread(void *userdata)
 			work[frame].blk.nonce = 0;
 			work[frame].valid = true;
 			work[frame].ready = 0;
-			
-			my_block = block;
 			need_work = false;
 		}
 		globalThreads[0] = threads;
@@ -822,13 +818,13 @@ static void *gpuminer_thread(void *userdata)
 
 			if (res[0]) {
 				for(j = 0; j < work[res_frame].ready; j++) {
-					if (unlikely(res[j])) { 
+					if (unlikely(res[j])) {
 						uint32_t start = (work[res_frame].res_nonce + j)<<10;
 						uint32_t my_g, my_nonce;
 
 						res[j] = 0;
 						my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count, j);
-					}       
+					}
 				}
 			}
 			work[res_frame].ready = false;
@@ -856,7 +852,6 @@ static void *gpuminer_thread(void *userdata)
 		res_frame = frame;
 		work[res_frame].ready = threads;
 		work[res_frame].res_nonce = work[res_frame].blk.nonce;
-
 		work[frame].blk.nonce += threads;
 
 		if (unlikely(work[frame].blk.nonce > 4000000 - threads) ||
