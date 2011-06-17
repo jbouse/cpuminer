@@ -21,7 +21,6 @@ typedef struct {
     uint merkle; uint ntime; uint nbits; uint nonce;
     uint fW0; uint fW1; uint fW2; uint fW3; uint fW15;
     uint fW01r; uint fcty_e; uint fcty_e2;
-    uint loops;
 } dev_blk_ctx;
 
 __kernel __attribute__((vec_type_hint(uint))) WGS void oclminer(
@@ -52,14 +51,12 @@ __kernel __attribute__((vec_type_hint(uint))) WGS void oclminer(
 
   uint A, B, C, D, E, F, G, H;
   uint W0, W1, W2, W3, W4, W5, W6, W7, W8, W9, W10, W11, W12, W13, W14, W15;
-  uint res = 0, it;
+  uint res = 0;
   const uint myid = get_global_id(0);
-  const uint local_loops = loops;
 
   const uint tnonce = (ctx->nonce + myid)<<10;
 
-for (it = myid * local_loops; it < local_loops; it++) {
-    W3 = it ^ tnonce;
+    W3 = 0 ^ tnonce;
     E = fcty_e +  W3; A = state0 + E; E = E + fcty_e2;
     D = D1 + (rotr(A, 6) ^ rotr(A, 11) ^ rotr(A, 25)) + (C1 ^ (A & (B1 ^ C1))) + K[ 4] +  0x80000000; H = H1 + D; D = D + (rotr(E, 2) ^ rotr(E, 13) ^ rotr(E, 22)) + ((E & F1) | (G1 & (E | F1)));
     C = C1 + (rotr(H, 6) ^ rotr(H, 11) ^ rotr(H, 25)) + (B1 ^ (H & (A ^ B1))) + K[ 5]; G = G1 + C; C = C + (rotr(D, 2) ^ rotr(D, 13) ^ rotr(D, 22)) + ((D & E) | (F1 & (D | E)));
@@ -280,7 +277,6 @@ for (it = myid * local_loops; it < local_loops; it++) {
     D = D + (rotr(A, 6) ^ rotr(A, 11) ^ rotr(A, 25)) + (C ^ (A & (B ^ C))) + K[60] + W12; H = H + D;
 
 	res |= (H==0xa41f32e7);
-}
-	output[myid] = res;
-  output[0] |= res;
+
+	*output |= res;
 }

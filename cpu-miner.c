@@ -256,7 +256,7 @@ struct work {
 
 	unsigned char	hash[32];
 
-	uint32_t		output[MAXTHREADS];
+	uint32_t		output[1];
 	uint32_t		res_nonce;
 	uint32_t		valid;
 	uint32_t		ready;
@@ -735,7 +735,7 @@ static void *gpuminer_thread(void *userdata)
 	struct thr_info *mythr = userdata;
 	struct timeval tv_start;
 	int thr_id = mythr->id;
-	uint32_t res[MAXTHREADS];
+	uint32_t res;
 
 	setpriority(PRIO_PROCESS, 0, 19);
 
@@ -764,10 +764,10 @@ static void *gpuminer_thread(void *userdata)
 	int res_frame = 0;
 	bool need_work = true;
 	unsigned long hashes_done = 0;
-	unsigned int threads = 102400 * 4;
+	unsigned int threads = 1 << 21;
 	unsigned int h0count = 0;
-	unsigned int loops = 128;
 	gettimeofday(&tv_start, NULL);
+	res = 0;
 
 	while (1) {
 		struct timeval tv_end, diff;
@@ -791,7 +791,6 @@ static void *gpuminer_thread(void *userdata)
 			work[frame].blk.nonce = 0;
 			work[frame].valid = true;
 			work[frame].ready = 0;
-			work[frame].blk.loops = loops;
 			need_work = false;
 		}
 		globalThreads[0] = threads;
@@ -811,52 +810,47 @@ static void *gpuminer_thread(void *userdata)
 
 		clFlush(clState->commandQueue);
 
-		hashes_done += threads * loops;
+		hashes_done += threads;
 
 		if (work[res_frame].ready) {
 			uint32_t bestG = ~0;
 			uint32_t nonce;
 			int j;
 
-			if (res[0]) {
-				for(j = 0; j < work[res_frame].ready; j++) {
-					if (unlikely(res[j])) {
-						uint32_t start = (work[res_frame].res_nonce + j)<<10;
-						uint32_t my_g, my_nonce;
+			if (res) {
+				res = 0;
+				applog(LOG_INFO, "Found something?");
+				for (j = 0; j < work[res_frame].ready; j++) {
+					uint32_t start = (work[res_frame].res_nonce + j) << 10;
+					uint32_t my_g, my_nonce;
 
-						res[j] = 0;
-						my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count, j);
-					}
+					my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count);
 				}
 			}
 			work[res_frame].ready = false;
 		}
 
-		if (hashes_done >= threads * 1024) {
-			gettimeofday(&tv_end, NULL);
-			timeval_subtract(&diff, &tv_end, &tv_start);
-			hashmeter(thr_id, &diff, hashes_done);
-			hashes_done = 0;
-
-			/* adjust max_nonce to meet target scan time */
-			if (diff.tv_usec > 500000)
-				diff.tv_sec++;
-			if (diff.tv_sec > 5)
-				applog(LOG_INFO, "Not reaching opt_scantime by %d", diff.tv_sec);
-			gettimeofday(&tv_start, NULL);
-		}
-
 		status = clEnqueueReadBuffer(clState->commandQueue, clState->outputBuffer, CL_TRUE, 0, 
-				sizeof(uint32_t) * threads, res, 0, NULL, NULL);   
+				sizeof(uint32_t), &res, 0, NULL, NULL);   
 		if (unlikely(status != CL_SUCCESS))
 			{ applog(LOG_ERR, "Error: clEnqueueReadBuffer failed. (clEnqueueReadBuffer)\n"); goto out;}
+
+		gettimeofday(&tv_end, NULL);
+		timeval_subtract(&diff, &tv_end, &tv_start);
+		if (diff.tv_sec > 4) {
+			if (diff.tv_usec > 500000)
+				diff.tv_sec++;
+			hashmeter(thr_id, &diff, hashes_done);
+			hashes_done = 0;
+			gettimeofday(&tv_start, NULL);
+		}
 
 		res_frame = frame;
 		work[res_frame].ready = threads;
 		work[res_frame].res_nonce = work[res_frame].blk.nonce;
-		work[frame].blk.nonce += threads * loops;
+		work[frame].blk.nonce += threads;
 
-		if (unlikely(work[frame].blk.nonce > 4000000 - threads) ||
+		if (unlikely(work[frame].blk.nonce > ~0UL - threads * 2) ||
 			(work_restart[thr_id].restart))
 				need_work = true;
 	}

@@ -1,5 +1,3 @@
-#define MAXTHREADS 2000000
-
 #ifdef __APPLE_CC__
 #include <OpenCL/opencl.h>
 #else
@@ -15,11 +13,9 @@ typedef struct {
     cl_uint merkle; cl_uint ntime; cl_uint nbits; cl_uint nonce;
 	cl_uint fW0; cl_uint fW1; cl_uint fW2; cl_uint fW3; cl_uint fW15;
 	cl_uint fW01r; cl_uint fcty_e; cl_uint fcty_e2;
-	cl_uint loops;
 } dev_blk_ctx;
 
 extern void precalc_hash(dev_blk_ctx *blk, uint32_t *state, uint32_t *data);
 extern uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
 			      struct work *work, uint32_t start, uint32_t end,
-			      uint32_t *best_nonce, unsigned int *h0count,
-			      unsigned int thread);
+			      uint32_t *best_nonce, unsigned int *h0count);

@@ -133,8 +133,7 @@ void precalc_hash(dev_blk_ctx *blk, uint32_t *state, uint32_t *data) {
 
 uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
 		       struct work *work, uint32_t start, uint32_t end, 
-		       uint32_t *best_nonce, unsigned int *h0count,
-		       unsigned int thread)
+		       uint32_t *best_nonce, unsigned int *h0count)
 {
 	cl_uint A, B, C, D, E, F, G, H;
 	cl_uint W[16];
@@ -189,8 +188,7 @@ uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
 		}
 	}
 out:
-	if (unlikely(best_g == ~0) && thread)
-		applog(LOG_ERR, "No best_g found! Error in OpenCL code?");
+	// if (unlikely(best_g == ~0)) applog(LOG_ERR, "No best_g found! Error in OpenCL code?");
 
 	return best_g;
 }
