@@ -809,7 +809,7 @@ static void *gpuminer_thread(void *userdata)
 
 		clFlush(clState->commandQueue);
 
-		hashes_done += threads * 1024;
+		hashes_done += threads;
 
 		if (work[res_frame].ready) {
 			uint32_t bestG = ~0;
