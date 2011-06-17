@@ -826,7 +826,7 @@ static void *gpuminer_thread(void *userdata)
 						uint32_t my_g, my_nonce;
 
 						res[j] = 0;
-						my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count);
+						my_g = postcalc_hash(mythr, &work[res_frame].blk, &work[res_frame], start, start + 1026, &my_nonce, &h0count, j);
 					}       
 				}
 			}

@@ -20,4 +20,5 @@ typedef struct {
 extern void precalc_hash(dev_blk_ctx *blk, uint32_t *state, uint32_t *data);
 extern uint32_t postcalc_hash(struct thr_info *thr, dev_blk_ctx *blk,
 			      struct work *work, uint32_t start, uint32_t end,
-			      uint32_t *best_nonce, unsigned int *h0count);
+			      uint32_t *best_nonce, unsigned int *h0count,
+			      unsigned int thread);
