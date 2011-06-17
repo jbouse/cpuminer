@@ -770,11 +770,12 @@ static void *gpuminer_thread(void *userdata)
 	gettimeofday(&tv_start, NULL);
 
 	while (1) {
-		struct timeval tv_start, tv_end, diff;
+		struct timeval tv_end, diff;
 
 		if (need_work || my_block != block) {
 			work_restart[thr_id].restart = 0;
-			frame ^= 1;
+			frame++;
+			frame %= 2;
 
 			if (opt_debug)
 				applog(LOG_DEBUG, "getwork");
