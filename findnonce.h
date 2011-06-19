@@ -5,6 +5,9 @@
 #endif
 #include "miner.h"
 
+#define MAXTHREADS (0xFFFFFFFF)
+#define BUFFERSIZE (sizeof(uint32_t) * 128)
+
 typedef struct {
     cl_uint ctx_a; cl_uint ctx_b; cl_uint ctx_c; cl_uint ctx_d;
     cl_uint ctx_e; cl_uint ctx_f; cl_uint ctx_g; cl_uint ctx_h;

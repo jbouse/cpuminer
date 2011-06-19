@@ -210,7 +210,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize) {
 	// Load CL file, build CL program object, create CL kernel object
 	/////////////////////////////////////////////////////////////////
 	//
-	const char * filename  = "DiabloMiner.cl";
+	const char * filename  = "oclminer.cl";
 	int pl;
 	char *source = file_contents(filename, &pl);
 	size_t sourceSize[] = {(size_t)pl};
@@ -237,7 +237,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize) {
 	}
 
 	/* get a kernel object handle for a kernel with the given name */
-	clState->kernel = clCreateKernel(clState->program, "search", &status);
+	clState->kernel = clCreateKernel(clState->program, "oclminer", &status);
 	if(status != CL_SUCCESS)
 	{
 		printf("Error: Creating Kernel from program. (clCreateKernel)\n");
@@ -260,7 +260,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize) {
         return NULL;
     }   
 
-	clState->outputBuffer = clCreateBuffer(clState->context, CL_MEM_READ_WRITE, sizeof(uint32_t) * 256, NULL, &status);
+	clState->outputBuffer = clCreateBuffer(clState->context, CL_MEM_READ_WRITE, sizeof(uint32_t) * 128, NULL, &status);
 	if(status != CL_SUCCESS) {
 		printf("Error: clCreateBuffer (outputBuffer)\n");
 		return NULL;
