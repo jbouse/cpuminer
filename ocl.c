@@ -14,16 +14,13 @@
 #include "findnonce.h"
 #include "ocl.h"
 
-cl_uint preferred_vwidth = 1;
-size_t max_work_size;
-
 char *file_contents(const char *filename, int *length)
 {
 	FILE *f = fopen(filename, "r");
 	void *buffer;
 
 	if (!f) {
-		fprintf(stderr, "Unable to open %s for reading\n", filename);
+		applog(LOG_ERR, "Unable to open %s for reading", filename);
 		return NULL;
 	}
 
@@ -47,7 +44,7 @@ int clDevicesNum() {
 	status = clGetPlatformIDs(0, NULL, &numPlatforms);
 	if(status != CL_SUCCESS)
 	{   
-		printf("Error: Getting Platforms. (clGetPlatformsIDs)\n");
+		applog(LOG_ERR, "Error: Getting Platforms. (clGetPlatformsIDs)");
 		return -1;
 	}   
 
@@ -57,7 +54,7 @@ int clDevicesNum() {
 		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
 		if(status != CL_SUCCESS)
 		{   
-			printf("Error: Getting Platform Ids. (clGetPlatformsIDs)\n");
+			applog(LOG_ERR, "Error: Getting Platform Ids. (clGetPlatformsIDs)");
 			return -1;
 		}   
 
@@ -68,7 +65,7 @@ int clDevicesNum() {
 			status = clGetPlatformInfo( platforms[i], CL_PLATFORM_VENDOR, sizeof(pbuff), pbuff, NULL);
 			if(status != CL_SUCCESS)
 			{   
-				printf("Error: Getting Platform Info. (clGetPlatformInfo)\n");
+				applog(LOG_ERR, "Error: Getting Platform Info. (clGetPlatformInfo)");
 				free(platforms);
 				return -1;
 			}   
@@ -90,7 +87,7 @@ int clDevicesNum() {
 	status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, NULL, &numDevices);
 	if(status != CL_SUCCESS)
 	{
-		printf("Error: Getting Device IDs (num)\n");
+		applog(LOG_ERR, "Error: Getting Device IDs (num)");
 		return -1;
 	}
 
@@ -102,7 +99,7 @@ void advance(char **area, unsigned *remaining, const char *marker)
 	char *find = memmem(*area, *remaining, marker, strlen(marker));
 
 	if (!find)
-		fprintf(stderr, "Marker \"%s\" not found\n", marker), exit(1);
+		applog(LOG_ERR, "Marker \"%s\" not found", marker), exit(1);
 	*remaining -= find - *area;
 	*area = find;
 }
@@ -155,7 +152,7 @@ void patch_opcodes(char *w, unsigned remaining)
 	}
 }
 
-_clState *initCl(int gpu, char *name, size_t nameSize)
+_clState *initCl(unsigned int gpu, char *name, size_t nameSize)
 {
 	bool hasBitAlign = false;
 	cl_int status = 0;
@@ -168,7 +165,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	status = clGetPlatformIDs(0, NULL, &numPlatforms);
 	if(status != CL_SUCCESS)
 	{   
-		printf("Error: Getting Platforms. (clGetPlatformsIDs)\n");
+		applog(LOG_ERR, "Error: Getting Platforms. (clGetPlatformsIDs)");
 		return NULL;
 	}   
 
@@ -178,7 +175,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 		status = clGetPlatformIDs(numPlatforms, platforms, NULL);
 		if(status != CL_SUCCESS)
 		{   
-			printf("Error: Getting Platform Ids. (clGetPlatformsIDs)\n");
+			applog(LOG_ERR, "Error: Getting Platform Ids. (clGetPlatformsIDs)");
 			return NULL;
 		}   
 
@@ -188,7 +185,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 			status = clGetPlatformInfo( platforms[i], CL_PLATFORM_VENDOR, sizeof(pbuff), pbuff, NULL);
 			if(status != CL_SUCCESS)
 			{   
-				printf("Error: Getting Platform Info. (clGetPlatformInfo)\n");
+				applog(LOG_ERR, "Error: Getting Platform Info. (clGetPlatformInfo)");
 				free(platforms);
 				return NULL;
 			}   
@@ -210,12 +207,12 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, NULL, &numDevices);
 	if(status != CL_SUCCESS)
 	{
-		printf("Error: Getting Device IDs (num)\n");
+		applog(LOG_ERR, "Error: Getting Device IDs (num)");
 		return NULL;
 	}
 
 	cl_device_id *devices;
-	if(numDevices > 0 ) {
+	if (numDevices > 0 ) {
 		devices = (cl_device_id *)malloc(numDevices*sizeof(cl_device_id));
 
 		/* Now, get the device list data */
@@ -223,11 +220,11 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 		status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, numDevices, devices, NULL);
 		if(status != CL_SUCCESS)
 		{
-			printf("Error: Getting Device IDs (list)\n");
+			applog(LOG_ERR, "Error: Getting Device IDs (list)");
 			return NULL;
 		}
 
-		printf("List of devices:\n");
+		applog(LOG_INFO, "List of devices:");
 
 		unsigned int i;
 		for(i=0; i<numDevices; i++) {
@@ -235,26 +232,26 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 			status = clGetDeviceInfo(devices[i], CL_DEVICE_NAME, sizeof(pbuff), pbuff, NULL);
 			if(status != CL_SUCCESS)
 			{
-				printf("Error: Getting Device Info\n");
+				applog(LOG_ERR, "Error: Getting Device Info");
 				return NULL;
 			}
 
-			printf("\t%i\t%s\n", i, pbuff);
+			applog(LOG_INFO, "\t%i\t%s", i, pbuff);
 		}
 
-		if (gpu >= 0 && gpu < numDevices) {
+		if (gpu < numDevices) {
 			char pbuff[100];
 			status = clGetDeviceInfo(devices[gpu], CL_DEVICE_NAME, sizeof(pbuff), pbuff, NULL);
 			if(status != CL_SUCCESS)
 			{
-				printf("Error: Getting Device Info\n");
+				applog(LOG_ERR, "Error: Getting Device Info");
 				return NULL;
 			}
 
-			printf("Selected %i: %s\n", gpu, pbuff);
+			applog(LOG_INFO, "Selected %i: %s", gpu, pbuff);
 			strncpy(name, pbuff, nameSize);
 		} else {
-			printf("Invalid GPU %i\n", gpu);
+			applog(LOG_ERR, "Invalid GPU %i", gpu);
 			return NULL;
 		}
 
@@ -265,43 +262,39 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	clState->context = clCreateContextFromType(cps, CL_DEVICE_TYPE_GPU, NULL, NULL, &status);
 	if(status != CL_SUCCESS)
 	{
-		printf("Error: Creating Context. (clCreateContextFromType)\n");
+		applog(LOG_ERR, "Error: Creating Context. (clCreateContextFromType)");
 		return NULL;
 	}
 
 	/* Check for BFI INT support. Hopefully people don't mix devices with
 	 * and without it! */
 	char * extensions = malloc(1024);
+	const char * camo = "cl_amd_media_ops";
+	char *find;
 
-	/* This needs to create separate programs for each GPU, but for now
-	 * assume they all have the same capabilities D: */
-	for (i = 0; i < numDevices; i++) {
-		const char * camo = "cl_amd_media_ops";
-		char *find;
-
-		status = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, 1024, (void *)extensions, NULL);
-		if (status != CL_SUCCESS) {
-			applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_EXTENSIONS");
-			return NULL;
-		}
-		find = strstr(extensions, camo);
-		if (find)
-			hasBitAlign = true;
-
-		status = clGetDeviceInfo(devices[i], CL_DEVICE_PREFERRED_VECTOR_WIDTH_INT, sizeof(cl_uint), (void *)&preferred_vwidth, NULL);
-		if (status != CL_SUCCESS) {
-			applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_PREFERRED_VECTOR_WIDTH_INT");
-			return NULL;
-		}
-		applog(LOG_INFO, "Preferred vector width reported %d", preferred_vwidth);
-
-		status = clGetDeviceInfo(devices[i], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), (void *)&max_work_size, NULL);
-		if (status != CL_SUCCESS) {
-			applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_MAX_WORK_GROUP_SIZE");
-			return NULL;
-		}
-		applog(LOG_INFO, "Max work group size reported %d", max_work_size);
+	status = clGetDeviceInfo(devices[gpu], CL_DEVICE_EXTENSIONS, 1024, (void *)extensions, NULL);
+	if (status != CL_SUCCESS) {
+		applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_EXTENSIONS");
+		return NULL;
 	}
+	find = strstr(extensions, camo);
+	if (find)
+		hasBitAlign = true;
+
+	status = clGetDeviceInfo(devices[gpu], CL_DEVICE_PREFERRED_VECTOR_WIDTH_INT, sizeof(cl_uint), (void *)&clState->preferred_vwidth, NULL);
+	if (status != CL_SUCCESS) {
+		applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_PREFERRED_VECTOR_WIDTH_INT");
+		return NULL;
+	}
+	applog(LOG_INFO, "Preferred vector width reported %d", clState->preferred_vwidth);
+
+	status = clGetDeviceInfo(devices[gpu], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), (void *)&clState->max_work_size, NULL);
+	if (status != CL_SUCCESS) {
+		applog(LOG_ERR, "Error: Failed to clGetDeviceInfo when trying to get CL_DEVICE_MAX_WORK_GROUP_SIZE");
+		return NULL;
+	}
+	if (opt_debug)
+		applog(LOG_DEBUG, "Max work group size reported %d", clState->max_work_size);
 
 	/////////////////////////////////////////////////////////////////
 	// Load CL file, build CL program object, create CL kernel object
@@ -316,7 +309,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	size_t sourceSize[] = {(size_t)pl};
 
 	/* Patch the source file with the preferred_vwidth */
-	if (preferred_vwidth > 1) {
+	if (clState->preferred_vwidth > 1) {
 		char *find = strstr(source, "VECTORSX");
 
 		if (unlikely(!find)) {
@@ -324,11 +317,12 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 			return NULL;
 		}
 		find += 7; // "VECTORS"
-		if (preferred_vwidth == 2)
+		if (clState->preferred_vwidth == 2)
 			strncpy(find, "2", 1);
 		else
 			strncpy(find, "4", 1);
-		applog(LOG_INFO, "Patched source to suit %d vectors", preferred_vwidth);
+		if (opt_debug)
+			applog(LOG_DEBUG, "Patched source to suit %d vectors", clState->preferred_vwidth);
 	}
 
 	/* Patch the source file defining BFI_INT */
@@ -341,14 +335,18 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 		}
 		find += 7; // "BFI_INT"
 		strncpy(find, " ", 1);
-		applog(LOG_INFO, "cl_amd_media_ops found, patched source with BFI_INT");
-	} else
-		applog(LOG_INFO, "cl_amd_media_ops not found, will not BFI_INT patch");
+		if (opt_debug)
+			applog(LOG_DEBUG, "cl_amd_media_ops found, patched source with BFI_INT");
+	} else if (opt_debug)
+		applog(LOG_DEBUG, "cl_amd_media_ops not found, will not BFI_INT patch");
+
+	applog(LOG_INFO, "Initialising kernel with%s BFI_INT patching, %d vectors and %d worksize",
+	       hasBitAlign ? "" : "out", clState->preferred_vwidth, clState->max_work_size);
 
 	clState->program = clCreateProgramWithSource(clState->context, 1, (const char **)&source, sourceSize, &status);
 	if(status != CL_SUCCESS) 
 	{   
-		printf("Error: Loading Binary into cl_program (clCreateProgramWithSource)\n");
+		applog(LOG_ERR, "Error: Loading Binary into cl_program (clCreateProgramWithSource)");
 		return NULL;
 	}
 
@@ -356,13 +354,13 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	status = clBuildProgram(clState->program, 1, &devices[gpu], NULL, NULL, NULL);
 	if(status != CL_SUCCESS) 
 	{   
-		printf("Error: Building Program (clBuildProgram)\n");
+		applog(LOG_ERR, "Error: Building Program (clBuildProgram)");
 		size_t logSize;
 		status = clGetProgramBuildInfo(clState->program, devices[gpu], CL_PROGRAM_BUILD_LOG, 0, NULL, &logSize);
 
 		char *log = malloc(logSize);
 		status = clGetProgramBuildInfo(clState->program, devices[gpu], CL_PROGRAM_BUILD_LOG, logSize, log, NULL);
-		printf("%s\n", log);
+		applog(LOG_INFO, "%s", log);
 		return NULL; 
 	}
 
@@ -382,7 +380,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 		binaries = (char **)malloc( sizeof(char *)*nDevices );
 		for( i = 0; i < nDevices; i++ ) {
 			if (opt_debug)
-				applog(LOG_DEBUG, "binary size %d : %d\n", i, binary_sizes[i]);
+				applog(LOG_DEBUG, "binary size %d : %d", i, binary_sizes[i]);
 			if( binary_sizes[i] != 0 )
 				binaries[i] = (char *)malloc( sizeof(char)*binary_sizes[i] );
 			else
@@ -414,21 +412,21 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 			w--; remaining++;
 			w += start; remaining -= start;
 			if (opt_debug)
-				printf("At %p (%u rem. bytes), to begin patching\n",
+				applog(LOG_DEBUG, "At %p (%u rem. bytes), to begin patching",
 					w, remaining);
 			patch_opcodes(w, length);
 		}
 		status = clReleaseProgram(clState->program);
 		if(status != CL_SUCCESS)
 		{
-			printf("Error: Releasing program. (clReleaseProgram)\n");
+			applog(LOG_ERR, "Error: Releasing program. (clReleaseProgram)");
 			return NULL;
 		}
 
 		clState->program = clCreateProgramWithBinary(clState->context, numDevices, &devices[gpu], binary_sizes, (const unsigned char **)binaries, &status, NULL);
 		if(status != CL_SUCCESS) 
 		{   
-			printf("Error: Loading Binary into cl_program (clCreateProgramWithBinary)\n");
+			applog(LOG_ERR, "Error: Loading Binary into cl_program (clCreateProgramWithBinary)");
 			return NULL;
 		}
 	}
@@ -437,13 +435,13 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	status = clBuildProgram(clState->program, 1, &devices[gpu], NULL, NULL, NULL);
 	if(status != CL_SUCCESS) 
 	{   
-		printf("Error: Building Program (clBuildProgram)\n");
+		applog(LOG_ERR, "Error: Building Program (clBuildProgram)");
 		size_t logSize;
 		status = clGetProgramBuildInfo(clState->program, devices[gpu], CL_PROGRAM_BUILD_LOG, 0, NULL, &logSize);
 
 		char *log = malloc(logSize);
 		status = clGetProgramBuildInfo(clState->program, devices[gpu], CL_PROGRAM_BUILD_LOG, logSize, log, NULL);
-		printf("%s\n", log);
+		applog(LOG_INFO, "%s", log);
 		return NULL; 
 	}
 
@@ -451,7 +449,7 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	clState->kernel = clCreateKernel(clState->program, "search", &status);
 	if(status != CL_SUCCESS)
 	{
-		printf("Error: Creating Kernel from program. (clCreateKernel)\n");
+		applog(LOG_ERR, "Error: Creating Kernel from program. (clCreateKernel)");
 		return NULL;
 	}
 
@@ -461,13 +459,13 @@ _clState *initCl(int gpu, char *name, size_t nameSize)
 	clState->commandQueue = clCreateCommandQueue( clState->context, devices[gpu], 0, &status);
 	if(status != CL_SUCCESS)
 	{
-		printf("Creating Command Queue. (clCreateCommandQueue)\n");
+		applog(LOG_ERR, "Creating Command Queue. (clCreateCommandQueue)");
 		return NULL;
 	}
 
 	clState->outputBuffer = clCreateBuffer(clState->context, CL_MEM_READ_WRITE, sizeof(uint32_t) * 128, NULL, &status);
 	if(status != CL_SUCCESS) {
-		printf("Error: clCreateBuffer (outputBuffer)\n");
+		applog(LOG_ERR, "Error: clCreateBuffer (outputBuffer)");
 		return NULL;
 	}
 

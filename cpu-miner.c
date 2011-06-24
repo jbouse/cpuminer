@@ -184,7 +184,7 @@ static struct option_help options_help[] = {
 	  "(-D) Enable debug output (default: off)" },
 
 	{ "intensity",
-	  "(-I) Intensity of scanning (0 - 16, default 5)" },
+	  "(-I) Intensity of scanning (0 - 10, default 5)" },
 
 	{ "log",
 	  "(-l) Interval in seconds between log output (default 5)" },
@@ -825,20 +825,21 @@ static void *gpuminer_thread(void *userdata)
 	struct work *work = malloc(sizeof(struct work));
 	bool need_work = true;
 	unsigned int threads = 1 << (15 + scan_intensity);
-	unsigned int vectors = preferred_vwidth;
+	unsigned int vectors = clState->preferred_vwidth;
 	unsigned int hashes_done = threads * vectors;
 
 	gettimeofday(&tv_start, NULL);
 	globalThreads[0] = threads;
-	localThreads[0] = max_work_size / vectors;
+	localThreads[0] = clState->max_work_size / vectors;
 
 	while (1) {
-		struct timeval tv_end, diff;
+		struct timeval tv_end, diff, tv_workstart;
 		unsigned int i;
 
 		clFinish(clState->commandQueue);
 
 		if (need_work) {
+			gettimeofday(&tv_workstart, NULL);
 			/* obtain new work from internal workio thread */
 			if (unlikely(!get_work(mythr, work))) {
 				applog(LOG_ERR, "work retrieval failed, exiting "
@@ -850,7 +851,7 @@ static void *gpuminer_thread(void *userdata)
 			work->blk.nonce = 0;
 			status = queue_kernel_parameters(&work->blk, kernel, clState->outputBuffer);
 			if (unlikely(status != CL_SUCCESS))
-				{ applog(LOG_ERR, "Error: clSetKernelArg of all params failed."); exit (1); }
+				{ applog(LOG_ERR, "Error: clSetKernelArg of all params failed."); goto out; }
 
 			work_restart[thr_id].restart = 0;
 			need_work = false;
@@ -897,9 +898,11 @@ static void *gpuminer_thread(void *userdata)
 		gettimeofday(&tv_start, NULL);
 
 		work->blk.nonce += hashes_done;
+		timeval_subtract(&diff, &tv_end, &tv_workstart);
 
-		if (unlikely(work->blk.nonce > MAXTHREADS - hashes_done) ||
-			(work_restart[thr_id].restart))
+		if (diff.tv_sec > opt_scantime  || 
+			work->blk.nonce > MAXTHREADS - hashes_done ||
+			work_restart[thr_id].restart)
 				need_work = true;
 	}
 out:
@@ -1037,7 +1040,7 @@ static void parse_arg (int key, char *arg)
 		break;
 	case 'I':
 		v = atoi(arg);
-		if (v < 0 || v > 16) /* sanity check */
+		if (v < 0 || v > 10) /* sanity check */
 			show_usage();
 		scan_intensity = v;
 		break;
@@ -1165,7 +1168,7 @@ static void parse_cmdline(int argc, char *argv[])
 int main (int argc, char *argv[])
 {
 	struct thr_info *thr;
-	int i;
+	unsigned int i;
 	char name[32];
 
 #ifdef WIN32
@@ -1177,7 +1180,7 @@ int main (int argc, char *argv[])
 
 	nDevs = clDevicesNum();
 	if (opt_ndevs) {
-		printf("%i\n", nDevs);
+		applog(LOG_INFO, "%i", nDevs);
 		return nDevs;
 	}
 
@@ -1258,13 +1261,13 @@ int main (int argc, char *argv[])
 		if (!thr->q)
 			return 1;
 
-		printf("Init GPU %i\n", i);
+		applog(LOG_INFO, "Init GPU %i", i);
 		clStates[i] = initCl(i, name, sizeof(name));
 		if (!clStates[i]) {
 			applog(LOG_ERR, "Failed to init GPU %d", i);
 			continue;
 		}
-		printf("initCl() finished. Found %s\n", name);
+		applog(LOG_INFO, "initCl() finished. Found %s", name);
 
 		if (unlikely(pthread_create(&thr->pth, NULL, gpuminer_thread, thr))) {
 			applog(LOG_ERR, "thread %d create failed", i);
